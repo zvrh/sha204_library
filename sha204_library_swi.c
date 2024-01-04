@@ -9,11 +9,11 @@
 
 static uint pio_offset;
 
-static inline void debug_printf(const char *__restrict, ...) {
-#ifdef SHA204_SWI_DEBUG
-    printf("> wakeup...\n");
+#ifdef SHA204_SWI_DEBUG // add_compile_definitions(SHA204_SWI_DEBUG)
+#define debug_printf(format, ...) printf(format,  ## __VA_ARGS__)
+#else
+#define debug_printf(...) (void)(0)
 #endif
-}
 
 void swi_init(uint8_t pin) {
     pio_offset = pio_add_program(SWI_UART_PIO, &sha204_pio_program);
