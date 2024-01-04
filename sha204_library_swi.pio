@@ -1,0 +1,97 @@
+.program sha204_pio
+
+PUBLIC sha204_wake:
+    set pindirs, 0      [8 * 4 - 1] ; start & bit<0:2>
+    nop                 [8 * 4 - 1] ; bit<3:6>
+    set pindirs, 1                  ; stop
+
+PUBLIC sha204_rx:
+    mov isr, null
+    set pindirs, 1
+    sha204_rx_bitloop:
+.wrap_target
+        wait 0 pin 0        [27]    ; wait start, 并延时到bit<1>中间位置，器件时钟偏慢所以等待28周期
+        in pins, 1          [31]
+.wrap
+
+PUBLIC sha204_tx:
+    pull                    ; wait data
+    out x, 4                ; 低4位为循环计数， 为0时则退出发送
+    jmp !x, sha204_rx
+    sha204_tx_bitloop:
+        set pindirs, 0              [8 - 1]     ; start
+        set pindirs, 1              [8 - 1]     ; bit<0>
+        out pindirs, 1              [8 - 1]     ; bit<1>
+        set pindirs, 1              [8 * 4 - 1] ; bit<2:5>
+        jmp x--, sha204_tx_bitloop  [8 * 2 - 1] ; bit<6> & stop
+    jmp sha204_tx
+
+% c-sdk {
+#include <hardware/clocks.h>
+#include <pico/time.h>
+
+static inline void sha204_pio_program_init(PIO pio, uint sm, uint offset, uint pin, uint baud) {
+    pio_sm_config c = sha204_pio_program_get_default_config(offset);
+
+    // GPIO init, put low & pull up
+    gpio_pull_up(pin);
+    pio_sm_set_pins_with_mask(pio, sm, 1u << pin, 1u << pin);
+    pio_sm_set_pindirs_with_mask(pio, sm, 1u << pin, 1u << pin);
+    pio_gpio_init(pio, pin);
+    gpio_set_oeover(pin, GPIO_OVERRIDE_INVERT);
+    pio_sm_set_pins_with_mask(pio, sm, 0, (1u << pin));
+
+    // IO mapping
+    sm_config_set_set_pins(&c, pin, 1);
+    sm_config_set_out_pins(&c, pin, 1);
+    sm_config_set_in_pins(&c, pin); // for WAIT, IN
+    sm_config_set_jmp_pin(&c, pin);
+
+    // out no autopull; in 8-bit autopush
+    sm_config_set_out_shift(&c, true, false, 32);
+    sm_config_set_in_shift(&c, true, true, 8);
+
+    // SM transmits 1 bit per 8 execution cycles.
+    float div = (float) clock_get_hz(clk_sys) / (8 * baud);
+    sm_config_set_clkdiv(&c, div);
+
+    // Configure and start SM
+    pio_sm_init(pio, sm, offset + sha204_pio_offset_sha204_tx, &c);
+    pio_sm_set_enabled(pio, sm, true);
+}
+
+static inline void sha204_pio_program_wake(PIO pio, uint sm, uint offset) {
+    pio_sm_exec(pio, sm, pio_encode_jmp(offset + sha204_pio_offset_sha204_wake));
+}
+
+static inline void sha204_pio_program_tx_start(PIO pio, uint sm, uint offset) {
+    pio_sm_clear_fifos(pio, sm);
+    pio_sm_exec(pio, sm, pio_encode_jmp(offset + sha204_pio_offset_sha204_tx));
+}
+
+static inline void sha204_pio_program_tx_stop(PIO pio, uint sm) {
+    while (pio_sm_is_tx_fifo_full(pio, sm)) tight_loop_contents();
+    pio_sm_put(pio, sm, 0x00);
+    while (!pio_sm_is_tx_fifo_empty(pio, sm)) tight_loop_contents();
+}
+
+static inline void sha204_pio_program_put_blocking(PIO pio, uint sm, uint8_t data) {
+    while (pio_sm_is_tx_fifo_full(pio, sm)) tight_loop_contents();
+    pio_sm_put(pio, sm, (((uint32_t) data) << 4) | 0x7);
+}
+
+static inline bool sha204_pio_program_wait_readable(PIO pio, uint sm, uint32_t timeout) {
+    uint32_t t = time_us_32();
+    while (pio_sm_is_rx_fifo_empty(pio, sm)) {
+        if ((time_us_32() - t) > timeout) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static inline uint8_t sha204_pio_program_get(PIO pio, uint sm) {
+    return (uint8_t) (pio_sm_get(pio, sm) >> 24);
+}
+
+%}
