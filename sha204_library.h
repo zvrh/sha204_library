@@ -283,10 +283,16 @@ void sha204_init(uint8_t pin);    // Constructor
 
 uint8_t sha204c_wakeup(uint8_t *response);
 
+uint8_t sha204c_sleep();
+
+uint8_t sha204c_resync(uint8_t size, uint8_t *response);
+
 uint8_t sha204c_send_and_receive(uint8_t *tx_buffer, uint8_t rx_size, uint8_t *rx_buffer,
                                  uint8_t execution_delay, uint8_t execution_timeout);
 
-uint8_t sha204c_resync(uint8_t size, uint8_t *response);
+void sha204c_calculate_crc(uint8_t length, uint8_t *data, uint8_t *crc);
+
+uint8_t sha204c_check_crc(uint8_t *response);
 
 uint8_t sha204m_random(uint8_t *tx_buffer, uint8_t *rx_buffer, uint8_t mode);
 
